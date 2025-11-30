@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">SecretPass</string>
+    <string name="success">Success</string>
 </resources>
