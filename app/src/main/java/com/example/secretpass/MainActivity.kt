@@ -8,14 +8,21 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.BatteryManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.widget.addTextChangedListener
 import com.example.secretpass.databinding.ActivityMainBinding
+import java.io.File
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
@@ -31,6 +38,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var lastShakeTime: Long = 0
     private val shakeThreshold = 12f
     private val minTimeBetweenShakesMs = 1000L
+
+    //Noise detection
+    private var audioRecord: AudioRecord? = null
+    private var isRecording = false
+    private val noiseCheckIntervalMs = 200L
+    private val noiseThreshold = 2000f
 
     //Conditions
     private var condition1North = false
@@ -48,6 +61,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             } else {
                 // Permission denied → condition stays false
                 condition4ContactExists = false
+                updateUI()
+            }
+        }
+
+    private val requestAudioPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            if (isGranted) {
+                startNoiseMonitoringInternal()
+            } else {
+                // If user denies, keep condition as false (quiet)
+                condition2Noise = false
                 updateUI()
             }
         }
@@ -182,6 +206,88 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             }
         }
     }
+
+    private fun startNoiseMonitoring() {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            startNoiseMonitoringInternal()
+        } else {
+            requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startNoiseMonitoringInternal() {
+        if (isRecording) return
+
+        val sampleRate = 8000
+        val bufferSize = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        if (bufferSize <= 0) {
+            condition2Noise = false
+            updateUI()
+            return
+        }
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize
+        )
+
+        audioRecord?.startRecording()
+        isRecording = true
+
+        Thread {
+            val buffer = ShortArray(bufferSize)
+
+            while (isRecording) {
+                val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                if (read > 0) {
+                    val rms = calculateRms(buffer, read)
+                    val isNoisy = rms > noiseThreshold
+
+                    // Update only if changed
+                    if (isNoisy != condition2Noise) {
+                        condition2Noise = isNoisy
+                        runOnUiThread { updateUI() }
+                    }
+                }
+                Thread.sleep(noiseCheckIntervalMs)
+            }
+        }.start()
+    }
+
+    private fun calculateRms(buffer: ShortArray, read: Int): Float {
+        var sum = 0f
+        for (i in 0 until read) {
+            sum += buffer[i] * buffer[i]
+        }
+        return sqrt(sum / read)
+    }
+
+    private fun stopNoiseMonitoring() {
+        isRecording = false
+
+        audioRecord?.apply {
+            try { stop() } catch (_: Exception) {}
+            release()
+        }
+        audioRecord = null
+
+        condition2Noise = false
+        updateUI()
+    }
     private fun checkContactCondition() {
         val hasPermission = ContextCompat.checkSelfPermission(
             this,
@@ -272,10 +378,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (hasPermission) {
             checkContactConditionInternal()
         }
+
+        //Start noise monitoring if we already have permission, otherwise it will be requested
+        startNoiseMonitoring()
     }
 
     override fun onPause() {
         super.onPause()
         sensorManager?.unregisterListener(this)
+        stopNoiseMonitoring()
     }
 }
