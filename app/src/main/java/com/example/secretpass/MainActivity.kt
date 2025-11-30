@@ -2,11 +2,13 @@ package com.example.secretpass
 
 import android.Manifest
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.BatteryManager
 import android.os.Bundle
 import android.provider.ContactsContract
 import androidx.activity.result.contract.ActivityResultContracts
@@ -70,8 +72,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun checkPasswordCondition() {
-        // TODO later: get battery percentage and build the correct password
-        condition5PasswordCorrect = false
+        val password = binding.etPassword.text?.toString().orEmpty()
+
+        val batteryPercent = getBatteryPercentage()
+        // If for some reason we couldn't get battery, just treat as incorrect
+        if (batteryPercent !in 0..100) {
+            condition5PasswordCorrect = false
+            updateUI()
+            return
+        }
+
+        val expectedPassword = "secret$batteryPercent"
+        condition5PasswordCorrect = (password == expectedPassword)
+
         updateUI()
     }
 
@@ -180,6 +193,25 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         updateUI()
     }
 
+
+    private fun getBatteryPercentage(): Int {
+        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+        val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        if (level in 0..100) {
+            return level
+        }
+
+        // Fallback (older devices)
+        val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val batteryStatus = registerReceiver(null, intentFilter)
+        val rawLevel = batteryStatus?.getIntExtra("level", -1) ?: -1
+        val scale = batteryStatus?.getIntExtra("scale", -1) ?: -1
+        return if (rawLevel >= 0 && scale > 0) {
+            (rawLevel * 100) / scale
+        } else {
+            -1
+        }
+    }
 
     override fun onResume() {
         super.onResume()
