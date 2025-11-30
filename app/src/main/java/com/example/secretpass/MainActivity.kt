@@ -1,18 +1,24 @@
 package com.example.secretpass
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Bundle
+import android.provider.ContactsContract
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.widget.addTextChangedListener
 import com.example.secretpass.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var binding: ActivityMainBinding
 
+    private val contactNameToCheck = "Chiburashka"
     //Sensors
     private var sensorManager: SensorManager? = null
     private var rotationVectorSensor: Sensor? = null
@@ -23,6 +29,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var condition3Shaken = false
     private var condition4ContactExists = false
     private var condition5PasswordCorrect = false
+
+
+    private val requestContactsPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            if (isGranted) {
+                // Permission granted → check the contact now
+                checkContactConditionInternal()
+            } else {
+                // Permission denied → condition stays false
+                condition4ContactExists = false
+                updateUI()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +64,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         binding.etPassword.addTextChangedListener {
             checkPasswordCondition()
         }
+
+        checkContactCondition()
+
     }
 
     private fun checkPasswordCondition() {
@@ -117,6 +139,48 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
+    private fun checkContactCondition() {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            checkContactConditionInternal()
+        } else {
+            // Ask for permission
+            requestContactsPermission.launch(Manifest.permission.READ_CONTACTS)
+        }
+    }
+
+    private fun checkContactConditionInternal() {
+        val uri = ContactsContract.Contacts.CONTENT_URI
+        val projection = arrayOf(
+            ContactsContract.Contacts._ID,
+            ContactsContract.Contacts.DISPLAY_NAME_PRIMARY
+        )
+
+        // Case-sensitive exact match
+        val selection = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} = ?"
+        val selectionArgs = arrayOf(contactNameToCheck)
+
+        val cursor = contentResolver.query(
+            uri,
+            projection,
+            selection,
+            selectionArgs,
+            null
+        )
+
+        cursor.use { c ->
+            val exists = c != null && c.count > 0
+            condition4ContactExists = exists
+        }
+
+        updateUI()
+    }
+
+
     override fun onResume() {
         super.onResume()
         rotationVectorSensor?.let { sensor ->
@@ -125,6 +189,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 sensor,
                 SensorManager.SENSOR_DELAY_NORMAL
             )
+        }
+        //Check if we already have permission and if so, check the contact
+        val hasPermission = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            checkContactConditionInternal()
         }
     }
 
